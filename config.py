@@ -9,14 +9,14 @@ CLIENT_BOT_TOKEN = os.getenv("CLIENT_BOT_TOKEN", "your_client_bot_token_here")
 DEV_BOT_TOKEN = os.getenv("DEV_BOT_TOKEN", "your_dev_bot_token_here")
 
 # OpenAI API Key
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "your_openai_api_key_here")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 # Telegram Group Chat ID (получите после создания группы и добавления ботов)
 TARGET_CHAT_ID = os.getenv("TARGET_CHAT_ID", "your_chat_id_here")
 
 # AI Settings
-MODEL_NAME = "gpt-4"  # или "gpt-3.5-turbo" для экономии
-MAX_MESSAGES = 35
+MODEL_NAME = "gpt-5-mini"  # или "gpt-3.5-turbo" для экономии
+MAX_MESSAGES = 50
 MIN_MESSAGES = 30
 
 # Bot Personalities
