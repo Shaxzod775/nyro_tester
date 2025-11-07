@@ -1,0 +1,7 @@
+python-telegram-bot>=20.7
+openai>=1.96.1
+python-dotenv==1.0.0
+aiohttp>=3.10
+openai-agents>=0.2.3
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
