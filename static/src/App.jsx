@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 
-const API_URL = window.location.origin;
+const API_URL = 'https://nyro-bot-tester.ailab.uz';
 
 const ROLE_NAMES = {
   pm: 'PM Bot',
