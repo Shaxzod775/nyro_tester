@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 
-const API_URL = 'https://nyro-bot-tester.ailab.uz';
+// const API_URL = 'https://nyro-bot-tester.ailab.uz';
+const API_URL = 'http://localhost:8000';
 
 const ROLE_NAMES = {
   pm: 'PM Bot',
@@ -26,6 +27,7 @@ function App() {
   const [prompt, setPrompt] = useState('');
   const [numMessages, setNumMessages] = useState('');
   const [chatId, setChatId] = useState('');
+  const [batchSize, setBatchSize] = useState('5');
   const [isRunning, setIsRunning] = useState(false);
   const [alert, setAlert] = useState({ message: '', type: 'info', show: false });
   const [botsStatus, setBotsStatus] = useState({
@@ -36,8 +38,17 @@ function App() {
   const [scenario, setScenario] = useState([]);
   const [scenarioCount, setScenarioCount] = useState(0);
   const [configChatId, setConfigChatId] = useState(null);
+  const [executionStatus, setExecutionStatus] = useState({
+    is_running: false,
+    is_paused: false,
+    messages_sent: 0,
+    total_messages: 0,
+    current_batch: 0,
+    total_batches: 0
+  });
   const statusIntervalRef = useRef(null);
   const autoStatusIntervalRef = useRef(null);
+  const executionIntervalRef = useRef(null);
 
   const showAlert = (message, type = 'info') => {
     setAlert({ message, type, show: true });
@@ -95,6 +106,45 @@ function App() {
     }
   };
 
+  const loadExecutionStatus = async () => {
+    try {
+      const response = await fetch(`${API_URL}/api/execution-status`);
+      const data = await response.json();
+      setExecutionStatus(data);
+      setIsRunning(data.is_running);
+
+      // Если выполнение завершено, останавливаем polling
+      if (!data.is_running && executionIntervalRef.current) {
+        clearInterval(executionIntervalRef.current);
+        executionIntervalRef.current = null;
+      }
+    } catch (error) {
+      console.error('Ошибка загрузки статуса выполнения:', error);
+    }
+  };
+
+  const handleResume = async () => {
+    try {
+      const response = await fetch(`${API_URL}/api/resume`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        }
+      });
+
+      const data = await response.json();
+
+      if (response.ok) {
+        showAlert(data.message, 'success');
+        await loadExecutionStatus();
+      } else {
+        showAlert(`Ошибка: ${data.detail}`, 'error');
+      }
+    } catch (error) {
+      showAlert('Ошибка запроса: ' + error.message, 'error');
+    }
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
 
@@ -107,7 +157,8 @@ function App() {
     const payload = {
       prompt: promptValue,
       num_messages: numMessages ? parseInt(numMessages) : null,
-      chat_id: chatId ? parseInt(chatId) : null
+      chat_id: chatId ? parseInt(chatId) : null,
+      batch_size: batchSize ? parseInt(batchSize) : 5
     };
 
     setIsRunning(true);
@@ -128,20 +179,13 @@ function App() {
         showAlert(`Успешно! ${data.message}`, 'success');
         await loadScenario();
 
-        // Обновляем статус каждые 2 секунды пока выполняется
-        if (statusIntervalRef.current) {
-          clearInterval(statusIntervalRef.current);
+        // Запускаем polling для execution status
+        if (executionIntervalRef.current) {
+          clearInterval(executionIntervalRef.current);
         }
-        statusIntervalRef.current = setInterval(async () => {
-          await loadStatus();
-          const statusResponse = await fetch(`${API_URL}/api/status`);
-          const statusData = await statusResponse.json();
-          if (!statusData.is_running) {
-            clearInterval(statusIntervalRef.current);
-            statusIntervalRef.current = null;
-            setIsRunning(false);
-          }
-        }, 2000);
+        executionIntervalRef.current = setInterval(async () => {
+          await loadExecutionStatus();
+        }, 1000);
       } else {
         showAlert(`Ошибка: ${data.detail}`, 'error');
         setIsRunning(false);
@@ -160,6 +204,7 @@ function App() {
     loadStatus();
     loadConfig();
     loadScenario();
+    loadExecutionStatus();
 
     // Автообновление статуса каждые 10 секунд
     autoStatusIntervalRef.current = setInterval(loadStatus, 10000);
@@ -170,6 +215,9 @@ function App() {
       }
       if (autoStatusIntervalRef.current) {
         clearInterval(autoStatusIntervalRef.current);
+      }
+      if (executionIntervalRef.current) {
+        clearInterval(executionIntervalRef.current);
       }
     };
   }, []);
@@ -242,6 +290,24 @@ function App() {
               />
             </div>
 
+            <div className="form-group">
+              <label htmlFor="batchSize">
+                Размер батча (количество сообщений перед паузой):
+              </label>
+              <input
+                type="number"
+                id="batchSize"
+                value={batchSize}
+                onChange={(e) => setBatchSize(e.target.value)}
+                placeholder="По умолчанию: 5"
+                min="1"
+                max="50"
+              />
+              <small style={{ color: '#999', marginTop: '5px', display: 'block' }}>
+                После отправки указанного количества сообщений будет пауза
+              </small>
+            </div>
+
             <button
               type="submit"
               className="btn"
@@ -292,6 +358,111 @@ function App() {
           </button>
         </div>
       </div>
+
+      {/* Статус выполнения */}
+      {isRunning && (
+        <div className="card">
+          <h2>Статус выполнения</h2>
+          <div style={{ marginBottom: '20px' }}>
+            <div style={{
+              display: 'flex',
+              justifyContent: 'space-between',
+              marginBottom: '10px',
+              fontSize: '14px',
+              color: '#666'
+            }}>
+              <span>
+                Отправлено: {executionStatus.messages_sent} / {executionStatus.total_messages}
+              </span>
+              <span>
+                Батч: {executionStatus.current_batch} / {executionStatus.total_batches}
+              </span>
+            </div>
+
+            {/* Прогресс бар */}
+            <div style={{
+              width: '100%',
+              height: '30px',
+              backgroundColor: '#e0e0e0',
+              borderRadius: '15px',
+              overflow: 'hidden',
+              position: 'relative'
+            }}>
+              <div style={{
+                width: `${executionStatus.total_messages > 0
+                  ? (executionStatus.messages_sent / executionStatus.total_messages * 100)
+                  : 0}%`,
+                height: '100%',
+                backgroundColor: executionStatus.is_paused ? '#ffa500' : '#667eea',
+                transition: 'width 0.3s ease',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                color: 'white',
+                fontWeight: 'bold',
+                fontSize: '14px'
+              }}>
+                {executionStatus.total_messages > 0
+                  ? Math.round((executionStatus.messages_sent / executionStatus.total_messages) * 100)
+                  : 0}%
+              </div>
+            </div>
+
+            {/* Статус паузы */}
+            {executionStatus.is_paused && (
+              <div style={{
+                marginTop: '20px',
+                padding: '15px',
+                backgroundColor: '#fff3cd',
+                border: '2px solid #ffa500',
+                borderRadius: '8px',
+                textAlign: 'center'
+              }}>
+                <div style={{
+                  fontSize: '18px',
+                  fontWeight: 'bold',
+                  color: '#856404',
+                  marginBottom: '10px'
+                }}>
+                  ⏸️ ПАУЗА
+                </div>
+                <div style={{
+                  fontSize: '14px',
+                  color: '#856404',
+                  marginBottom: '15px'
+                }}>
+                  Отправлено {executionStatus.messages_sent} из {executionStatus.total_messages} сообщений
+                  <br />
+                  Батч {executionStatus.current_batch} из {executionStatus.total_batches} завершен
+                </div>
+                <button
+                  className="btn"
+                  onClick={handleResume}
+                  style={{
+                    backgroundColor: '#28a745',
+                    fontSize: '16px',
+                    padding: '12px 30px'
+                  }}
+                >
+                  ▶️ Продолжить
+                </button>
+              </div>
+            )}
+
+            {/* Статус выполнения */}
+            {!executionStatus.is_paused && executionStatus.is_running && (
+              <div style={{
+                marginTop: '15px',
+                textAlign: 'center',
+                color: '#667eea',
+                fontWeight: 'bold'
+              }}>
+                ⚙️ Отправка сообщений...
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Сценарий */}
       <div className="card">

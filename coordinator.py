@@ -137,7 +137,102 @@ class Coordinator:
         
         finally:
             self.is_running = False
-    
+
+    async def execute_scenario_with_batches(self, chat_id: int = None, batch_size: int = 5, execution_state: dict = None, scenario: List[Dict] = None):
+        """
+        Выполняет сценарий с паузами после каждого батча
+
+        Args:
+            chat_id: ID чата
+            batch_size: Количество сообщений в батче перед паузой
+            execution_state: Словарь для отслеживания состояния выполнения
+            scenario: Сценарий для выполнения (если не указан, используется current_scenario)
+        """
+
+        if chat_id is None:
+            chat_id = TARGET_CHAT_ID
+
+        if scenario is None:
+            scenario = self.current_scenario
+
+        if scenario is None:
+            print("❌ Нет сценария для выполнения!")
+            return
+
+        if self.is_running:
+            print("⚠️  Сценарий уже выполняется!")
+            return
+
+        self.is_running = True
+
+        print(f"\n▶️  Начало выполнения сценария в чате {chat_id}")
+        print(f"   Всего сообщений: {len(scenario)}")
+        print(f"   Размер батча: {batch_size}\n")
+
+        # Инициализируем состояние выполнения
+        if execution_state:
+            total_batches = (len(scenario) + batch_size - 1) // batch_size  # округление вверх
+            execution_state["total_messages"] = len(scenario)
+            execution_state["messages_sent"] = 0
+            execution_state["current_batch"] = 0
+            execution_state["total_batches"] = total_batches
+            execution_state["is_paused"] = False
+
+        try:
+            for i, message in enumerate(scenario, 1):
+                agent_role = message.get("agent")
+                text = message.get("text")
+                delay = message.get("delay", 0)
+
+                if agent_role not in self.bots:
+                    print(f"⚠️  Неизвестная роль: {agent_role}, пропускаем сообщение")
+                    continue
+
+                bot = self.bots[agent_role]
+
+                print(f"[{i}/{len(scenario)}] {bot.name} отправляет сообщение через {delay}с...")
+
+                await bot.send_message_with_typing(
+                    chat_id=chat_id,
+                    text=text,
+                    delay=delay
+                )
+
+                # Обновляем состояние
+                if execution_state:
+                    execution_state["messages_sent"] = i
+
+                # Небольшая дополнительная пауза для естественности
+                await asyncio.sleep(0.5)
+
+                # Проверяем, нужна ли пауза после батча
+                if i % batch_size == 0 and i < len(scenario):
+                    current_batch = i // batch_size
+                    if execution_state:
+                        execution_state["current_batch"] = current_batch
+                        execution_state["is_paused"] = True
+                        execution_state["resume_event"] = asyncio.Event()
+
+                    print(f"\n⏸️  ПАУЗА после {i} сообщений (батч {current_batch}/{execution_state.get('total_batches', '?')})")
+                    print(f"   Ожидание продолжения...")
+
+                    # Ждем команды продолжить
+                    if execution_state and execution_state["resume_event"]:
+                        await execution_state["resume_event"].wait()
+                        execution_state["is_paused"] = False
+                        execution_state["resume_event"] = None
+                        print(f"\n▶️  Продолжаем выполнение...\n")
+
+            print(f"\n✅ Сценарий выполнен! Отправлено {len(scenario)} сообщений")
+
+        except Exception as e:
+            print(f"\n❌ Ошибка при выполнении сценария: {e}")
+
+        finally:
+            self.is_running = False
+            if execution_state:
+                execution_state["is_paused"] = False
+
     async def run_full_cycle(self, user_prompt: str, chat_id: int = None, num_messages: int = None):
         """
         Полный цикл: генерация + выполнение сценария

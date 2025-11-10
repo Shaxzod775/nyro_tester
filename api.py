@@ -35,12 +35,23 @@ app.add_middleware(
 coordinator = Coordinator()
 is_running = False
 
+# Состояние выполнения с паузами
+execution_state = {
+    "is_paused": False,
+    "messages_sent": 0,
+    "total_messages": 0,
+    "current_batch": 0,
+    "total_batches": 0,
+    "resume_event": None
+}
+
 
 # Модели данных
 class RunRequest(BaseModel):
     prompt: str
     num_messages: Optional[int] = None
     chat_id: Optional[int] = None
+    batch_size: Optional[int] = 5
 
 
 class GenerateRequest(BaseModel):
@@ -50,6 +61,7 @@ class GenerateRequest(BaseModel):
 
 class ExecuteRequest(BaseModel):
     chat_id: Optional[int] = None
+    batch_size: Optional[int] = 5
 
 
 class StatusResponse(BaseModel):
@@ -61,6 +73,15 @@ class StatusResponse(BaseModel):
 class ScenarioResponse(BaseModel):
     scenario: Optional[List[Dict]] = None
     count: int
+
+
+class ExecutionStatusResponse(BaseModel):
+    is_running: bool
+    is_paused: bool
+    messages_sent: int
+    total_messages: int
+    current_batch: int
+    total_batches: int
 
 
 # API Endpoints
@@ -175,13 +196,14 @@ async def execute_scenario(request: ExecuteRequest):
         )
 
     # Запускаем в фоновом режиме
-    asyncio.create_task(run_scenario_background(chat_id))
+    asyncio.create_task(run_scenario_background(chat_id, request.batch_size))
 
     return {
         "success": True,
         "message": "Выполнение сценария начато",
         "chat_id": chat_id,
-        "messages_count": len(coordinator.current_scenario)
+        "messages_count": len(coordinator.current_scenario),
+        "batch_size": request.batch_size
     }
 
 
@@ -212,29 +234,75 @@ async def run_full_cycle(request: RunRequest):
         )
 
         # Запускаем в фоновом режиме
-        asyncio.create_task(run_scenario_background(chat_id))
+        asyncio.create_task(run_scenario_background(chat_id, request.batch_size))
 
         return {
             "success": True,
             "message": "Сценарий сгенерирован и запущен",
             "chat_id": chat_id,
-            "messages_count": len(scenario)
+            "messages_count": len(scenario),
+            "batch_size": request.batch_size
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-async def run_scenario_background(chat_id: int):
-    """Фоновое выполнение сценария"""
-    global is_running
+async def run_scenario_background(chat_id: int, batch_size: int = 5):
+    """Фоновое выполнение сценария с батчами и паузами"""
+    global is_running, execution_state
     is_running = True
 
     try:
-        await coordinator.execute_scenario(chat_id)
+        await coordinator.execute_scenario_with_batches(chat_id, batch_size, execution_state)
     except Exception as e:
         print(f"Ошибка выполнения сценария: {e}")
     finally:
         is_running = False
+        execution_state["is_paused"] = False
+        execution_state["messages_sent"] = 0
+        execution_state["total_messages"] = 0
+        execution_state["current_batch"] = 0
+        execution_state["total_batches"] = 0
+        execution_state["resume_event"] = None
+
+
+@app.get("/api/execution-status", response_model=ExecutionStatusResponse)
+async def get_execution_status():
+    """Получить статус выполнения сценария"""
+    global execution_state, is_running
+
+    return ExecutionStatusResponse(
+        is_running=is_running,
+        is_paused=execution_state["is_paused"],
+        messages_sent=execution_state["messages_sent"],
+        total_messages=execution_state["total_messages"],
+        current_batch=execution_state["current_batch"],
+        total_batches=execution_state["total_batches"]
+    )
+
+
+@app.post("/api/resume")
+async def resume_execution():
+    """Продолжить выполнение после паузы"""
+    global execution_state
+
+    if not execution_state["is_paused"]:
+        raise HTTPException(
+            status_code=400,
+            detail="Выполнение не приостановлено"
+        )
+
+    if execution_state["resume_event"]:
+        execution_state["resume_event"].set()
+        return {
+            "success": True,
+            "message": "Выполнение продолжено"
+        }
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail="Нет активного события для продолжения"
+        )
 
 
 @app.get("/api/config")
